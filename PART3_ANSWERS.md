@@ -1,244 +1,164 @@
 # Part 3 — Problem-Solving Answers
 
-*Short answers. Reasoning over volume. Each one is anchored in the code I actually
-submitted, so you can check the claims against `server/`.*
+*Short answers. The assignment asks for reasoning rather than volume.*
 
----
+## 1. The classifier is wrong 30% of the time — what do I do, and how do I decide whether it's "good enough"?
 
-## 1. The classifier is wrong 30% of the time. What do you do, and how do you decide if it's "good enough"?
+**Thirty percent isn't a verdict, it's a description.** On its own it doesn't tell me whether the model is bad or my labels are. So the order of work is:
 
-**First: 30% is not a number yet, it's a description.** Error rate only means something
-once I know *where* the errors are and *what they cost*. Three things have to be
-established before touching the model.
+**First, check the label noise.**
 
-**Is it the model that's wrong, or my labels?** I sampled ~50 tiles and had a human
-label them independently. If my labels disagree with each other at a similar rate to
-how they disagree with the model, then a chunk of the 30% is label noise and no amount
-of retraining helps — the ceiling is the annotator agreement, not the network. This is
-the single most important check and the one most often skipped, because it's
-unglamorous and it can kill the entire project.
+- Sample ~50 tiles and have a human label them independently
+- If annotators disagree with *each other* at roughly the rate they disagree with the model, then a large slice of that 30% is label noise
+- No amount of retraining moves that number — the ceiling is annotator agreement, not the network
+- This is the unglamorous check most projects skip, and it's the one that tells you whether you have a data problem or a modelling problem
 
-**Is the error uniform or structured?** On my eval set, 87.6% accuracy, but the errors
-are concentrated: `SeaLake → Forest` (6) and `AnnualCrop → River` (5) account for most
-of the loss, while `Industrial` and `Highway` are nearly perfect. That is much more
-useful than a flat "30% wrong". It tells me the model isn't weak, it has two specific
-confusions — water-adjacent vegetation and water-adjacent crops, which are genuinely
-ambiguous in a 64×64 crop with no season or location context. That's a data problem
-with a known shape, not a modelling problem.
+**Second, look at the shape of the error, not the amount.**
 
-**Does it beat the alternative?** The bar is not "perfect", it's "better than what the
-analyst does today". If the current process is a human eyeballing every tile, then a
-model that reliably shortlists candidates beats it — the human still decides, the
-model just orders the queue. Against that bar, 70% accuracy with good *ranking* is
-genuinely useful. Against a bar of "auto-populate a report that gets signed", it is
-not, and no amount of tuning changes that without also changing the interface.
+- On my held-out set accuracy is 87.6%, but mistakes are **concentrated**
+- `SeaLake→Forest` and `AnnualCrop→River` account for most of the loss
+- `Industrial` and `Highway` are nearly perfect
+- That says the model isn't broadly weak — it has two specific confusions between classes that are genuinely ambiguous in a 64×64 crop with no season or location context
+- Which is a data problem with a known shape, not a model that needs to be generally better
 
-**So the test I would use is precision on the review queue, not overall accuracy.**
-Concretely: if I flag the lowest-confidence 10% of tiles, what fraction of those flags
-are actually the class I care about? I ship only if that number clears a threshold we
-agree on with the analyst, and I tune to move that number rather than to move accuracy.
+**Third, establish what I'd be compared against.** The bar isn't perfection, it's beating whatever the analyst does today.
 
-**What I'd actually do, in order:**
-1. Measure label noise first. Cap the achievable accuracy at annotator agreement.
-2. Break error down per class and per confusion, not as one aggregate.
-3. Decide the operating point with the people who will use the output — this is a
-   business decision about the cost of a miss versus the cost of a review.
-4. Ship the "predict and flag" pattern, never "predict and assert". The interface must
-   make uncertainty visible so the human is never misled into thinking the model was
-   sure.
-5. Log everything — hash, confidence, full probability vector, model version — so that
-   when the 30% figure is disputed later, it's answerable with a query rather than an
-   opinion.
-6. Only then invest in accuracy, and only in the two confusions that are actually
-   costing us.
+- If the status quo is a human eyeballing every tile, a model that reliably builds a shortlist genuinely helps — the human still decides, the model just orders the queue
+- That's a much easier thing to be 70% right about
+- If the status quo is "auto-populate a report that gets signed," no level of accuracy saves you, and the *interface* has to change instead of the model
 
-**The honest framing:** "good enough" is never a property of the model alone. It's a
-property of the model *and* the workflow it's dropped into. The same 70%-accurate model
-is useless behind a "Commit" button and valuable behind a "here are 50 tiles worth
-looking at" button. I build the second one deliberately.
+**So the metric I'd optimise is precision on the review queue, not accuracy:**
 
----
+- Flag the lowest-confidence 10% of tiles
+- Ask: what fraction of those flags are truly the class the analyst cares about?
+- Ship once that clears a threshold we agree on together
+- Tune to move that number, not to move accuracy
 
-## 2. Offline, nobody watching. A month after deployment, how do you know it's still working correctly?
+**In order, then:** measure label noise → break error down per class and per confusion → agree the operating point with the people who'd use the output → ship predict-and-flag rather than predict-and-assert → log the hash and full probability vector so the 30% figure is always arguable with a query rather than an opinion → spend accuracy effort last, and only on the two confusions actually costing us.
 
-**Starting from the honest position: you don't, unless you built the check before you
-needed it.** A service that nobody is watching degrades silently and finds out at the
-worst moment. So the monitoring has to be a property of the system, not a dashboard
-somebody remembers to open.
+**The honest framing:** "good enough" is never a property of the model alone. The same 70%-accurate model is useless behind a "Commit" button and valuable behind a "here are fifty tiles worth looking at" button. I build the second one deliberately.
 
-**The key distinction: liveness is not correctness.** `/health` returning `200` proves
-a process is running. It says nothing about whether that process is still loading the
-right weights, still normalising pixels correctly, or still writing results properly.
-Most of the failure modes that matter here are invisible to a health check. I'd rather
-have no health endpoint than believe it covers the risk.
+## 2. This runs offline with nobody watching — a month later, how would I know it's still working?
 
-**What I'd implement, cheapest first:**
+**Starting position: I wouldn't, unless I built the check before I needed it.** A service nobody is watching degrades silently and finds out at the worst possible moment. So monitoring has to be a property of the system, not a dashboard someone remembers to open.
 
-**A scheduled self-test against held-out ground truth.** This is the real answer. I keep
-a labelled gold set that is never used for training, and a small job (cron, on the box —
-there's no cloud to alert from) runs it through the full serving path on a schedule and
-writes a status file. It compares accuracy against a recorded baseline and exits
-non-zero on regression. This converts "is it still working" from an opinion into a
-number that anyone can check, and it reuses the test harness I need anyway. It also
-catches the failure that matters most: something changing that I didn't anticipate.
+**The key distinction: liveness isn't correctness.**
 
-**Confidence distribution monitoring.** The cheapest high-signal metric available. I
-log confidence on every request, so mean confidence and the flagged-rate over a rolling
-window are single queries. Sudden drops in mean confidence, or a jump in flagged rate,
-are hard to produce any other way. In my own system, a collapse from ~0.88 mean
-confidence to ~0.5 would be screaming before a single accuracy complaint arrived.
+- A 200 from `/health` proves a process is alive
+- It says nothing about whether it's still loading the right weights, normalising pixels correctly, or persisting results
+- Most failure modes that actually matter are invisible to a health check
+- I'd rather have no health endpoint than believe it covers the risk
 
-**Input drift tracking.** Every request logs the tile's SHA-256, name, byte size, and I
-can cheaply log basic pixel statistics. Hashing the *inputs* turns "have we started
-seeing new kinds of imagery?" into a set-difference against the training distribution.
-A sudden population of never-before-seen hashes is a strong upstream signal.
+**What I'd add, in priority order:**
 
-**Integrity checks on the artifact.** `model_version` is a hash of the weights, recorded
-on every prediction. Comparing the version in the logs against the file on disk catches
-a corrupted, truncated, or accidentally-swapped model — and because every stored row
-carries its version, it makes "this data was classified by a different model" a filter
-rather than a mystery.
+**A scheduled self-test against held-out ground truth — the single most valuable thing.**
 
-**Boring operational checks.** Disk space on the results volume and log directory, error
-rate, request rate, p95 latency, and a check that results are actually still being
-written. Disk-full is the classic silent killer: requests keep succeeding while nothing
-is persisted, and nobody notices for a month.
+- Keep a labelled gold set that's never used for training
+- A small cron job on the box runs it through the full serving path on a schedule
+- Writes a JSON status file; exits non-zero on regression against a recorded baseline
+- No cloud to alert from, so a file is the right output
+- Turns *"is it still working"* into a number anyone can check, and reuses the harness I'd want anyway
+- It's also the only check that catches the failure I most expect: someone updates a dependency, the ImageNet normalisation constants change, predictions shift quietly, and every green check stays green
 
-**What I would not do:** build a metrics stack. A time-series database, a dashboard, and
-an alerting pipeline are all the wrong shape for a single offline box. A nightly job
-that writes one JSON status file, plus a log anyone can `grep`, covers most of the risk
-at a fraction of the complexity. If someone isn't checking the status file, a fancy
-alert wouldn't have helped either.
+**Confidence distribution monitoring** — the cheapest high-signal metric available.
 
-**The failure I'd most expect, which none of the above fully covers:** someone updates a
-dependency, the ImageNet normalisation constants change, and predictions quietly shift
-while every health check stays green. The gold-set self-test is the only thing that
-catches that, which is why it is the one I'd insist on.
+- Mean confidence and flag rate over a rolling window are single queries over data I already log
+- A collapse from 0.88 to 0.5 would be visible long before anyone complained about accuracy
 
----
+**Input drift tracking.**
 
-## 3. Tiles are arriving fine, but stored results look wrong. How do I find the cause?
+- Hash the inputs so I can diff the set of tiles seen against the training distribution
+- Turns *"have we started getting different imagery?"* into a set difference rather than a hunch
 
-**The temptation is to suspect the model first. I would resist that.** The model is the
-slowest thing to check and by far the least likely. I work the pipeline from input to
-output, cheapest and most-likely first, and I make each step falsifiable before moving
-on.
+**Artifact integrity.**
 
-**Step 0 — one crucial discriminator, before anything else.** Take one tile whose true
-label I know. Run it through `POST /classify` and compare three things: the true label,
-the **live API response**, and the **stored row**. This splits the problem in half
-immediately:
-- API response wrong, stored row agrees → the bug is in inference or the model. Stop here.
-- API response right, stored row wrong → the bug is in the write path. The model is
-  innocent and I should not look at it.
+- `model_version` is recorded on every prediction
+- Comparing the version in the logs against a fresh hash of the file on disk catches a corrupted, truncated, or accidentally swapped model
+- Because every stored row carries its version, it turns *"this data came from a different model"* into a filter rather than a mystery
 
-Half of all "results look wrong" tickets die at this step, and it costs two minutes.
+**Boring operational checks.** Disk space on the results volume, error rate, request rate, p95 latency, and confirmation that rows are still being written. A full disk is the classic silent killer — requests keep succeeding while nothing is persisted.
 
-**Step 1 — is it everything or some of it?** Query the store. Filter by time: is the
-damage recent, or has it always been there? A sharp break at a specific timestamp points
-hard at a deploy, a config change, or a data-source change, and gives me an exact moment
-to diff against. A gradual drift points at drift itself. A total failure on one class
-and not others points at the class mapping. The shape of the wrongness is the biggest
-clue available and it costs one query.
+**What I would deliberately not build:** a metrics stack. A time-series database, a dashboard, and an alerting pipeline are the wrong shape for a single offline box. A nightly job writing one status file, plus a log anyone can grep, covers most of the risk at a fraction of the complexity — and if nobody's checking that file, a fancier alert wouldn't have helped either.
 
-**Step 2 — are the inputs what I think they are?** Verify the tiles are actually valid
-imagery: decode them, check dimensions and channel count, and compare their statistics
-to the training distribution. A pipeline upstream may have started sending grayscale
-tiles, tiles at a different resolution, or tiles that are actually a different band or
-sensor entirely. Compare the SHA-256s and sizes in the logs against what I expect to be
-seeing. This is cheap and it is upstream of everything else.
+## 3. Tiles are arriving fine but stored results look wrong — how do I find the cause?
 
-**Step 3 — is the preprocessing the same at serving time as it was at training time?**
-This is the single most common cause of a model that "suddenly" got worse, and it is
-silent — no exception, no log line, just quietly wrong numbers. The candidates:
-different resize interpolation, a different normalisation mean/std, RGB/BGR confusion,
-a different input size, or the training transform being reused on inference. I verify
-this by taking training tiles, running them through the **exact serving code path**, and
-checking that the predictions match what training produced. If they don't, the bug is
-here, and I've found it without touching the weights at all.
+**My instinct would be to suspect the model first, and I'd resist it.** The model is the slowest thing to check and by far the least likely culprit. I'd work the pipeline from input to output, cheapest and most likely first, making each step falsifiable before moving on.
 
-**Step 4 — is it the model artifact?** Compare the `model_version` in the logs against a
-fresh hash of the file on disk. A truncated download, a partial save, or a stale
-`model.pt` from an older run all present identically: correct code, wrong weights. I
-reload from a known-good copy and confirm the version changes.
+**Step 0 — the check that splits the problem in half.** Take a tile whose true label I know and compare three things:
 
-**Step 5 — class index mapping.** If predictions look *permuted* — everything is right
-except the labels are scrambled in a consistent way — the cause is almost always the
-ordering of the class list drifting apart from the ordering the trained head was fitted
-with. Reorder `CLASSES` and every prediction is confidently wrong while the model is
-untouched. It looks like a catastrophic model failure and is a one-line fix.
+- The true label
+- The **live API response**
+- The **stored row**
 
-**Step 6 — the storage layer itself.** If the live response was correct, stop trusting
-the CSV and look at how the row was written. Column shift, encoding issues, a truncated
-final line from a crash mid-append, or the boolean coercion path mangling `needs_review`.
-I read the raw file directly rather than through my own query code, because I do not
-trust the code I am debugging to tell me the truth about itself.
+Then:
 
-**Step 7 — only now, the model.** Re-run the full held-out evaluation through the
-serving path and compare against the stored baseline. If accuracy is intact and
-production behaviour is wrong, the difference is in the data reaching it, not in the
-model. If accuracy has genuinely collapsed, only now do I retrain or suspect corruption.
+- Response wrong, stored row agrees → the bug is in inference or the model. Stop looking elsewhere
+- Response right, stored row wrong → the bug is in the write path, and the model is innocent
 
-**The principle underneath all of it:** cheap to check, high prior probability first.
-Every step above either confirms or eliminates a whole category of cause. I never change
-the model until I have eliminated everything upstream of it, because "retrain and hope"
-destroys the evidence — after a retrain, the original bug is unreproducible and you
-learn nothing.
+Half of all "results look wrong" reports die right there, and it costs two minutes.
 
----
+**Step 1 — establish the shape of the damage.** One query, and it's the biggest clue available:
 
-## 4. What's the weakest part of your design, and what would break it first?
+- Filter by time: is this new, or has it always been there?
+- A sharp break at a specific timestamp points hard at a deploy, config change, or upstream data change — and gives me an exact moment to diff against
+- Gradual drift points at drift
+- Wrong on every tile of one class and not others points at the class mapping
 
-**The storage layer, without question.** Everything else is either correct or fails
-loudly. The CSV store is neither.
+**Step 2 — verify the inputs are what I think they are.**
 
-**What it actually is:** an append-and-scan file with no transactions, no locking, no
-schema enforcement, no indexes, and no concurrency safety. It's a fine placeholder and
-a genuinely bad database.
+- Decode the tiles, check dimensions and channel count
+- Compare their statistics to the training distribution
+- An upstream pipeline may have started sending grayscale tiles, a different resolution, or a different sensor entirely
+- Cheap, and it sits upstream of everything else
 
-**What breaks first, concretely:**
+**Step 3 — check that serving-time preprocessing still matches training.** This is the most common cause of a model that "suddenly" got worse, and it's silent — no exception, no log line, just quietly wrong numbers.
 
-**The most likely failure is concurrent writers.** CSV append is not atomic across
-processes. It works perfectly for the single uvicorn worker I run and documented, and
-the first person who deploys it with `--workers 4` — which is the obvious next thing
-anyone would do — gets interleaved and corrupted rows. Nothing warns you. The service
-keeps returning `200`, and the damage is discovered by an analyst three weeks later
-when a row has a label in the confidence column.
+- Candidates: different resize interpolation, different normalisation constants, RGB/BGR confusion, different input size
+- Verify by pushing training tiles through the **exact serving code path** and checking predictions match what training produced
+- If they don't, I've found it without touching the weights at all
 
-**The nastiest failure is a truncated final line.** If the process dies mid-append, the
-last row is half-written and is *not* valid CSV. My reader is tolerant of a malformed
-line, but a stricter tool — pandas, a spreadsheet, the next person who writes a query —
-will fail to parse the entire file and lose access to *every* row, not just the broken
-one. All the good data, made unreadable by one bad line. That's a data-loss-shaped
-failure from what looks like a read-only query problem.
+**Step 4 — check the artifact itself.**
 
-**Why this is the weakest *design* choice and not just a weak implementation:** the rest
-of the system quietly depends on it being trustworthy. The review queue is a query
-against this file. My idempotency story is "dedupe by content hash", which only means
-something if every row is intact. If a write is lost or corrupted, a tile silently
-vanishes from the analyst's queue — and that is precisely the failure mode where a
-review flag gets ignored, because nobody notices the tile that never showed up. The
-storage layer's weaknesses propagate into a *silent* correctness problem in the workflow.
+- Compare `model_version` in the logs against a fresh hash of the file on disk
+- A truncated download or a stale `model.pt` all present identically as correct code with wrong weights
 
-**How I'd fix it, in order:**
-1. **Writes durable before anything else** — write to a temp file and atomically rename,
-   or move to SQLite, which gives me real transactions and multi-process safety.
-2. **WAL-style append with integrity checking** — if I must keep a flat file, log records
-   with a checksum so a truncated tail is detectable and skippable rather than fatal.
-3. **Then** proper indexing for the query surface, so filter cost stops growing with
-   history.
+**Step 5 — look for permuted labels.** If predictions are *right* but the labels are scrambled in a consistent way, the cause is almost always the class list drifting out of order relative to the head that was fitted. That looks like catastrophic model failure and is a one-line fix.
 
-**Honourable mention, second weakest:** my train/test split is random, not grouped by
-scene. Tiles from the same satellite scene are near-duplicates, so a random split leaks
-scene identity across the boundary and my reported 87.6% is optimistic. I flagged this
-in the design note rather than quietly reporting the number. The fix is a
-grouped-by-scene split, which I can't do because the provided data has no scene
-identifiers. It's a limit of what I was given — but it means I'd treat that figure as an
-upper bound, and the first thing I'd fix if I could get scene metadata.
+**Step 6 — read the raw CSV directly** rather than through my own query code, because I don't trust the code I'm debugging to tell me the truth about itself.
 
----
+**Step 7 — only now, the model.** Re-run the full evaluation and consider retraining.
 
-*Where I'd spend the next week, in order: move storage to SQLite (fixes the worst thing
-and the concurrency hole together); add the scheduled gold-set self-test from Part 3.2;
-add per-class confidence thresholds; then look at the `SeaLake`/`AnnualCrop` confusions,
-which are the only place the model is genuinely weak.*
+**The principle underneath: cheap-first, high-prior-first.** Every step either confirms or eliminates an entire category of cause. And I never change the model until everything upstream is eliminated — because retraining as a first move destroys the evidence, and after a retrain the original bug is unreproducible and you learn nothing.
+
+## 4. What's the weakest part of my design, and what would break it first?
+
+**The storage layer, without question.** Everything else is either correct or fails loudly; the CSV store is neither. It's an append-and-scan file with no transactions, no locking, no schema enforcement, no indexes, and no concurrency safety — a fine placeholder and a genuinely bad database.
+
+**What breaks first — the most likely failure: concurrent writers.**
+
+- CSV append isn't atomic across processes
+- It works perfectly for the single uvicorn worker I run
+- The first person who deploys with `--workers 4` — the obvious next thing anyone would do — gets interleaved, corrupted rows
+- Nothing warns you. The service keeps returning 200, and the damage turns up weeks later when a row has a label sitting in the confidence column
+
+**The nastier failure: a truncated final line.**
+
+- If the process dies mid-append, the last row is half-written and isn't valid CSV
+- My own reader tolerates a malformed line, but pandas, a spreadsheet, or the next person to write a query will fail to parse the file and lose access to *every* row rather than just the broken one
+- All the good data, made unreadable by a single bad line — data loss wearing the costume of a read-only query problem
+
+**Why this is the weakest *design* choice, not just a weak implementation:** the rest of the system quietly assumes the store is trustworthy.
+
+- The review queue is a query against this file
+- The idempotency story is "dedupe by content hash" — which only means something if every row is intact
+- If a write is lost, a tile silently vanishes from the analyst's queue
+- That's precisely the failure mode where a review flag gets ignored, because nobody notices the tile that never showed up
+- So the storage weaknesses propagate into a *silent correctness problem in the workflow* rather than an obvious crash
+
+**What I'd fix, in order:**
+
+1. **Durable writes first** — atomic write-and-rename, or move to SQLite, which gets real transactions and multi-process safety together
+2. **Integrity checking** — so a truncated tail is detectable and skippable rather than fatal
+3. **Proper indexing** — so query cost stops growing with history
+
+**Close second: my train/test split.** It's random rather than grouped by scene. Tiles from one satellite scene are near-duplicates, so a random split leaks scene identity and my reported accuracy is optimistic. A grouped split would fix it, but I can't — the provided data has no scene identifiers, so it's a limit of the input rather than a choice I made. I'd still treat that number as an upper bound.

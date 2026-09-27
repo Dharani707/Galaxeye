@@ -8,7 +8,7 @@ query those stored results. No internet connection, no hosted model APIs, no fro
 
 | Deliverable | File |
 |---|---|
-| Part 1 — Design note | [`DESIGN_NOTE.md`](DESIGN_NOTE.md) |
+| Part 1 — Design note | [`PART1_ANSWERS.md`](PART1_ANSWERS.md) |
 | Part 2 — Code + this README | `server/`, `README.md` |
 | Part 3 — Reasoning answers | [`PART3_ANSWERS.md`](PART3_ANSWERS.md) |
 
@@ -47,7 +47,7 @@ AnnualCrop  Forest  Highway  Industrial  Residential  River  SeaLake
 
 The model is a **ResNet18 pre-trained on ImageNet, frozen, with a trained linear
 head** on top. Only 3,591 of 11.2M parameters are trained, which is why training takes
-under a minute on a laptop CPU. See [`DESIGN_NOTE.md`](DESIGN_NOTE.md) for why that was
+under a minute on a laptop CPU. See [`PART1_ANSWERS.md`](PART1_ANSWERS.md) for why that was
 chosen over fine-tuning.
 
 The trained weights ship with this repo as `model.pt`, so **you can run the service
@@ -464,7 +464,7 @@ uv run python -m server.train --unfreeze layer4
 
 ```
 .
-├── DESIGN_NOTE.md          Part 1 — approach, trade-offs, assumptions
+├── PART1_ANSWERS.md        Part 1 — approach, trade-offs, assumptions
 ├── PART3_ANSWERS.md        Part 3 — the four reasoning questions
 ├── README.md               This file
 ├── pyproject.toml          Dependencies
@@ -509,7 +509,7 @@ uv run python -m server.train --unfreeze layer4
 | **Frontend / UI** | Not requested. JSON API only, plus FastAPI's `/docs` |
 | Batch ingest | One tile per request is the core path; batching would need a queue |
 | Authentication | No analyst identity modelled — every caller is anonymous |
-| SQLite / Postgres | CSV is enough at this scale; `storage.py` isolates the swap. **This is the weakest part of the design** — see [`DESIGN_NOTE.md`](DESIGN_NOTE.md) |
+| SQLite / Postgres | CSV is enough at this scale; `storage.py` isolates the swap. **This is the weakest part of the design** — see [`PART1_ANSWERS.md`](PART1_ANSWERS.md) |
 | Geospatial queries | No coordinates or scene metadata in the provided data |
 | Automated monitoring | Discussed in Part 3 answer 2, not implemented |
 | Containerisation | `uv sync` + one command is enough for a single box |
