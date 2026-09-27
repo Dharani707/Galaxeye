@@ -1,0 +1,8 @@
+true\predicted,AnnualCrop,Forest,Highway,Industrial,Residential,River,SeaLake
+AnnualCrop,25,0,0,0,0,5,0
+Forest,0,29,0,0,0,1,0
+Highway,0,0,27,1,0,2,0
+Industrial,0,0,1,28,0,1,0
+Residential,0,0,1,3,26,0,0
+River,1,0,2,0,0,27,0
+SeaLake,0,6,1,0,0,1,22

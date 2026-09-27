@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+build/
+dist/
+*.egg-info/
+
+# Virtual environments
+.venv/
+.galaxeye-venv/
+galaxeye-env/
+
+# Assignment inputs - regenerable, not source
+data/
+reference/
+
+# Runtime output
+logs/
+predictions.csv
+
+# OS noise
+.DS_Store
+Thumbs.db
+desktop.ini
